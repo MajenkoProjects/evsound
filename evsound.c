@@ -3,6 +3,7 @@
 #include <string.h>
 #include <samplerate.h>
 #include <sndfile.h>
+#include <unistd.h>
 
 #define EV_PRESS 1
 #define EV_RELEASE 2
@@ -216,7 +217,7 @@ void PANIC(const char *msg) {
 
 
 
-int loadSample(const char *filename, struct sample_info *info) {
+int loadSample(const char *filename, struct sample_info *info, unsigned long rate) {
 	SF_INFO sfi;
 	printf("Loading sample %s\n", filename);
 	SNDFILE *f = sf_open(filename, SFM_READ, &sfi);
@@ -230,9 +231,7 @@ int loadSample(const char *filename, struct sample_info *info) {
 	sf_readf_float(f, data, sfi.frames);
 	sf_close(f);
 
-	float ratio = 48000.0 / (float)sfi.samplerate;
-
-	printf("Ratio: %f\n", ratio);
+	float ratio = (float)rate / (float)sfi.samplerate;
 
 	float *resampled = malloc(sizeof(float) * sfi.frames * sfi.channels * ratio);
 	if (resampled == NULL) PANIC("Unable to allocate resampled data");
@@ -260,13 +259,6 @@ int loadSample(const char *filename, struct sample_info *info) {
 	return 1;
 
 }
-
-
-
-
-
-
-
 
 
 void printEvent(struct event *e) {
@@ -455,19 +447,16 @@ const char *findPrefixForEvent(int event) {
 }
 
 struct sample *findSampleForEvent(int event) {
-	printf("Looking for event type %05x\n", event);
 	for (struct sample *s = samples; s; s = s->next) {
-		printf("  %05x\n", s->event);
 		if (s->event == event) return s;
 	}
 	return NULL;
 }
 
-void loadEventSamples() {
+void loadEventSamples(const char *kbd, const char *mouse, unsigned long rate) {
 	for (struct event *e = events; e; e = e->next) {
 
 		const char *prefix = findPrefixForEvent(e->data);
-		printf("Prefix: %s\n", prefix);
 		struct sample *sample = findSampleForEvent(e->data);
 		if (sample == NULL) {
 			sample = malloc(sizeof(struct sample));
@@ -489,18 +478,18 @@ void loadEventSamples() {
 
 		if (e->type == EV_PRESS) {
 			if (sample->press.data == NULL) {
-				sprintf(fn, "/home/matt/Sounds/Keyboards/Dell/05N292/Audio/%s_Press.wav", prefix);
-				loadSample(fn, &sample->press);
+				snprintf(fn, 1024, "%s/%s_Press.wav", (e->data & 0x10000) == 0x10000 ? mouse : kbd, prefix);
+				loadSample(fn, &sample->press, rate);
 			}
 		} else if (e->type == EV_RELEASE) {
 			if (sample->release.data == NULL) {
-				sprintf(fn, "/home/matt/Sounds/Keyboards/Dell/05N292/Audio/%s_Release.wav", prefix);
-				loadSample(fn, &sample->release);
+				snprintf(fn, 1024, "%s/%s_Release.wav", (e->data & 0x10000) == 0x10000 ? mouse : kbd, prefix);
+				loadSample(fn, &sample->release, rate);
 			}
 		} else if (e->type == EV_TYPE) {
 			if (sample->type.data == NULL) {
-				sprintf(fn, "/home/matt/Sounds/Keyboards/Dell/05N292/Audio/%s_Type.wav", prefix);
-				loadSample(fn, &sample->type);
+				snprintf(fn, 1024, "%s/%s_Type.wav", (e->data & 0x10000) == 0x10000 ? mouse : kbd, prefix);
+				loadSample(fn, &sample->type, rate);
 			}
 		}
 	}
@@ -537,9 +526,9 @@ void mixSamples(float *in1, float *in2, float *out, int num) {
 }
 
 
-void renderEvents(const char *filename) {
+void renderEvents(const char *filename, unsigned long rate) {
 	SF_INFO sfi = {
-		.samplerate = 48000,
+		.samplerate = rate,
 		.channels = 2,
 		.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16 | SF_ENDIAN_LITTLE,
 		.seekable = 1
@@ -549,7 +538,7 @@ void renderEvents(const char *filename) {
 
 	for (struct event *e = events; e; e = e->next) {
 
-		sf_count_t offset = e->ts * 48000.0;
+		sf_count_t offset = e->ts * (float)rate;
 
 		sf_seek(f, offset, SEEK_SET);
 
@@ -593,21 +582,66 @@ void renderEvents(const char *filename) {
 }
 
 int main(int argc, char **argv) {
-	FILE *evfile = fopen(argv[1], "r");
+
+	char *inputFilename = NULL;
+	char *outputFilename = NULL;
+	unsigned long sampleRate = 48000;
+	char *mouseDir = "/usr/share/evsound/sounds";
+	char *kbdDir = "/usr/share/evsound/sounds";
+	
+
+	int opt;
+
+	while ((opt = getopt(argc, argv, "hm:k:r:o:f:")) != -1) {
+		switch (opt) {
+			case 'h':
+				printf("Usage: evsound [-m mouse_dir] [-k kbd_dir] [-r rate] -f evfile -o output\n");
+				return 0;
+				break;
+	
+			case 'm':
+				mouseDir = optarg;
+				break;
+
+			case 'k':
+				kbdDir = optarg;
+				break;
+
+			case 'r':
+				sampleRate = strtoul(optarg, NULL, 0);
+				break;
+
+			case 'f':
+				inputFilename = optarg;
+				break;
+
+			case 'o':
+				outputFilename = optarg;
+				break;
+
+		}
+	}
+
+	if (inputFilename == NULL) {
+		printf("You must specify -f evfile\n");
+		return 10;
+	}
+
+	if (outputFilename == NULL) {
+		printf("You must specify -o outfile\n");
+		return 10;
+	}
+
+	FILE *evfile = fopen(inputFilename, "r");
+	if (!evfile) PANIC("Unable to read input file");
 	readEvents(evfile);
 	fclose(evfile);
 	compressEvents();
-	loadEventSamples();
+	loadEventSamples(kbdDir, mouseDir, sampleRate);
 
-	for (struct sample *s = samples; s; s = s->next) {
-		printf("Type %05x Press: %p %d %d Release: %p %d %d Type: %p %d %d\n", 
-			s->event, s->press.data, s->press.frames, s->press.channels,
-			s->release.data, s->release.frames, s->release.channels,
-			s->type.data, s->type.frames, s->type.channels
-		);
-	}
+	unlink(outputFilename);
 
-	renderEvents("events.wav");
+	renderEvents(outputFilename, sampleRate);
 
 	freeEvents();
 	freeSamples();
