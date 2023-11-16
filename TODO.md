@@ -5,3 +5,4 @@
 	* Mouse source directory
 * Error checking on all mallocs and similar
 * Default sample replacement for missing samples
+* Proper mixing of samples
