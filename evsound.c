@@ -209,18 +209,24 @@ struct sample *samples = NULL;
 
 
 
+void PANIC(const char *msg) {
+	fprintf(stderr, "PANIC: %s\n", msg);
+	exit(10);
+}
+
 
 
 int loadSample(const char *filename, struct sample_info *info) {
 	SF_INFO sfi;
 	printf("Loading sample %s\n", filename);
 	SNDFILE *f = sf_open(filename, SFM_READ, &sfi);
-
 	if (!f) {
-		printf("*** SAMPLE NOT FOUND ***\n");
+		printf("Warning: sample %s not found.\n", filename);
 		return 0;
 	}
+
 	float *data = malloc(sizeof(float) * sfi.frames * sfi.channels);
+	if (data == NULL) PANIC("Unable to allocate sample data");
 	sf_readf_float(f, data, sfi.frames);
 	sf_close(f);
 
@@ -229,6 +235,7 @@ int loadSample(const char *filename, struct sample_info *info) {
 	printf("Ratio: %f\n", ratio);
 
 	float *resampled = malloc(sizeof(float) * sfi.frames * sfi.channels * ratio);
+	if (resampled == NULL) PANIC("Unable to allocate resampled data");
 
 	int err = 0;
 
@@ -374,6 +381,7 @@ void readEvents(FILE *f) {
 
 		if (object != NULL) {
 			struct event *e = malloc(sizeof(struct event));
+			if (e == NULL) PANIC("Unable to allocate new event");
 
 			e->ts = strtof(line, NULL);
 			if (strcmp(direction, "press") == 0) {
@@ -463,6 +471,7 @@ void loadEventSamples() {
 		struct sample *sample = findSampleForEvent(e->data);
 		if (sample == NULL) {
 			sample = malloc(sizeof(struct sample));
+			if (sample == NULL) PANIC("Unable to allocate new sample");
 			bzero(sample, sizeof(struct sample));
 			sample->event = e->data;
 			if (samples == NULL) {
@@ -561,17 +570,9 @@ void renderEvents(const char *filename) {
 
 			if (si->data != NULL) {
 				float *inbuf = malloc(sizeof(float) * 2 * si->frames);
+				if (inbuf == NULL) PANIC("Unable to allocate input buffer");
 				float *mixbuf = malloc(sizeof(float) * 2 * si->frames);
-
-				if (inbuf == NULL) {
-					printf("Unable to allocate inbuf\n");
-					exit(10);
-				}
-
-				if (mixbuf == NULL) {
-					printf("Unable to allocate mixbuf\n");
-					exit(10);
-				}
+				if (mixbuf == NULL) PANIC("Unable to allocate mix buffer");
 
 				sf_readf_float(f, inbuf, si->frames);
 
